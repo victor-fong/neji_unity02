@@ -104,22 +104,28 @@ namespace MagicLeap
             _ready = false;
             int bufferSize = (frameData.Y.Data.Length + frameData.U.Data.Length + frameData.V.Data.Length) / this._compressionLevel;
             byte[] newBuffer = new byte[bufferSize];
-            int i = 0;
-            for (int j=0; j < frameData.Y.Data.Length; j++) {
-                if ((j % this._compressionLevel) == 0) {
-                    newBuffer[i++] = frameData.Y.Data[j];
+            if (this._compressionLevel == 1) {
+                Array.Copy(frameData.Y.Data, 0, newBuffer, 0, frameData.Y.Data.Length);
+                Array.Copy(frameData.U.Data, 0, newBuffer, frameData.Y.Data.Length, frameData.U.Data.Length);
+                Array.Copy(frameData.V.Data, 0, newBuffer, frameData.Y.Data.Length + frameData.U.Data.Length, frameData.V.Data.Length);
+            } else {
+                int i = 0;
+                for (int j=0; j < frameData.Y.Data.Length; j++) {
+                    if ((j % this._compressionLevel) == 0) {
+                        newBuffer[i++] = frameData.Y.Data[j];
+                    }
                 }
-            }
 
-            for (int j=0; j < frameData.U.Data.Length; j++) {
-                if ((j % this._compressionLevel) == 0) {
-                    newBuffer[i++] = frameData.U.Data[j];
+                for (int j=0; j < frameData.U.Data.Length; j++) {
+                    if ((j % this._compressionLevel) == 0) {
+                        newBuffer[i++] = frameData.U.Data[j];
+                    }
                 }
-            }
 
-            for (int j=0; j < frameData.V.Data.Length; j++) {
-                if ((j % this._compressionLevel) == 0) {
-                    newBuffer[i++] = frameData.V.Data[j];
+                for (int j=0; j < frameData.V.Data.Length; j++) {
+                    if ((j % this._compressionLevel) == 0) {
+                        newBuffer[i++] = frameData.V.Data[j];
+                    }
                 }
             }
             _webClient.Send(newBuffer);

@@ -1,6 +1,8 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using System;
+using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -26,8 +28,19 @@ public class WebClient : MonoBehaviour
         _sender.Close();
     }
 
+    private byte[] _deflate(byte[] data){
+        MemoryStream output = new MemoryStream();
+        using (GZipStream dstream = new GZipStream(output, System.IO.Compression.CompressionMode.Compress))
+        {
+            dstream.Write(data, 0, data.Length);
+            dstream.Close();
+        }
+        return output.ToArray();
+    }
+
     private void _send(byte[] data) {
         Debug.Log("Sending...");
+        data = _deflate(data);
         byte[] lengthBytes = BitConverter.GetBytes(data.Length);
         Debug.Log(String.Format("Sending {0} bytes", data.Length));
         if (BitConverter.IsLittleEndian)
