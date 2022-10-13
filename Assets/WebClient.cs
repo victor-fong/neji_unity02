@@ -1,12 +1,11 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using System;
-using System.IO;
-using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
+using System.Diagnostics;
 
 public class WebClient : MonoBehaviour
 {
@@ -28,21 +27,11 @@ public class WebClient : MonoBehaviour
         _sender.Close();
     }
 
-    private byte[] _deflate(byte[] data){
-        MemoryStream output = new MemoryStream();
-        using (GZipStream dstream = new GZipStream(output, System.IO.Compression.CompressionMode.Compress))
-        {
-            dstream.Write(data, 0, data.Length);
-            dstream.Close();
-        }
-        return output.ToArray();
-    }
-
     private void _send(byte[] data) {
-        Debug.Log("Sending...");
-        data = _deflate(data);
+        // Stopwatch stopwatch = new Stopwatch();
+        // stopwatch.Start();
         byte[] lengthBytes = BitConverter.GetBytes(data.Length);
-        Debug.Log(String.Format("Sending {0} bytes", data.Length));
+        // UnityEngine.Debug.Log(String.Format("Sending {0} bytes", data.Length));
         if (BitConverter.IsLittleEndian)
             Array.Reverse(lengthBytes);
         _sender.Send(lengthBytes);
@@ -53,8 +42,10 @@ public class WebClient : MonoBehaviour
         {
             totalSent += sent;
         }
-        Debug.Log("Finished sending...");
+        // stopwatch.Stop();
+        // UnityEngine.Debug.LogError(String.Format("Transmission Time is {0} ms", stopwatch.ElapsedMilliseconds));
     }
+
 
     public void Send(byte[] data){
         _send(data);
@@ -82,25 +73,25 @@ public class WebClient : MonoBehaviour
             {
                 // Connect to Remote EndPoint
                 _sender.Connect(remoteEP);
-                Debug.Log("WebClient Ready...");
+                UnityEngine.Debug.Log("WebClient Ready...");
             }
             catch (ArgumentNullException e)
             {
-                Debug.Log(e.StackTrace);
+                UnityEngine.Debug.Log(e.StackTrace);
             }
             catch (SocketException e)
             {
-                Debug.Log(e.StackTrace);
+                UnityEngine.Debug.Log(e.StackTrace);
             }
             catch (Exception e)
             {
-                Debug.Log(e.StackTrace);
+                UnityEngine.Debug.Log(e.StackTrace);
             }
 
         }
         catch (Exception e)
         {
-            Debug.Log(e.StackTrace);
+            UnityEngine.Debug.Log(e.StackTrace);
         }
     }
 

@@ -11,10 +11,15 @@
 // %BANNER_END%
 
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using System.Threading.Tasks;
 using UnityEngine.XR.MagicLeap;
+using System.Diagnostics;
+using System.Threading;
+using System.IO;
+using System.IO.Compression;
+using Neji;
 
 namespace MagicLeap
 {
@@ -26,20 +31,45 @@ namespace MagicLeap
     {
         [SerializeField]
         private WebClient _webClient;
+        private static readonly int PROCESS_THREAD_NUM = 10;
+        private static readonly int COMPRESSION_LEVEL = 3;
 
-        private bool _ready;
+        private MyQueue<MLCamera.YUVFrameInfo> processQueue;
+        private MyQueue<byte[]> sendQueue;
+        private List<Thread> processThreads;
+        private Thread sendThread;
 
-        private int _compressionLevel = 1;
+        
 
         /// <summary>
         /// Check for all required variables to be initialized.
         /// </summary>
         void Start()
         {
-            _ready = false;
-            Debug.Log("Initializing Raw Video Capture...");
+            processQueue = new MyQueue<MLCamera.YUVFrameInfo>(1);
+            sendQueue = new MyQueue<byte[]>(1);
+            processThreads = new List<Thread>(PROCESS_THREAD_NUM);
+            
+            UnityEngine.Debug.Log("Initializing Raw Video Capture...");
             if (_webClient == null) {
                 _webClient = GameObject.Find("WebClient").GetComponent<WebClient>();
+            }
+
+            for (int i = 0; i<PROCESS_THREAD_NUM; i++) {
+                Thread processThread = new Thread(()=>YUV2RGB(processQueue, sendQueue));
+                processThreads.Add(processThread);
+            }
+            sendThread = new Thread(()=>SendFromQueue(sendQueue));
+        }
+
+        private void SendFromQueue(MyQueue<byte[]> sendQueue) {
+            try{
+                while (true){
+                    byte[] data = sendQueue.Dequeue();
+                    _webClient.Send(data);
+                }
+            } catch (Exception e){
+                UnityEngine.Debug.LogError(e);
             }
         }
 
@@ -48,13 +78,15 @@ namespace MagicLeap
         /// </summary>
         public void OnCaptureStarted()
         {
-            Debug.Log("Capture Starts...");
-            
+            UnityEngine.Debug.Log("Capture Starts...");
             if (_webClient == null) {
-                Debug.LogError("WebClient Not Attached!");
+                UnityEngine.Debug.LogError("WebClient Not Attached!");
             }
             _webClient.StartClient();
-            _ready = true;
+            foreach (Thread processThread in processThreads) {
+                processThread.Start();
+            }
+            sendThread.Start();
         }
 
         /// <summary>
@@ -62,7 +94,8 @@ namespace MagicLeap
         /// </summary>
         public void OnCaptureEnded()
         {
-            Debug.Log("Capture Ends...");
+            UnityEngine.Debug.Log("Capture Ends...");
+            
             _webClient.Close();
         }
 
@@ -76,9 +109,12 @@ namespace MagicLeap
         public void OnRawCaptureDataReceived(MLCamera.ResultExtras extras, MLCamera.YUVFrameInfo frameData, MLCamera.FrameMetadata frameMetadata)
         {   // createYTexture(frameData);
             // createUVTexture(frameData);
-            if (_ready) {
-                sendFrame(frameData);
-            }
+            
+            // UnityEngine.Debug.Log(String.Format("Y | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.Y.Width, frameData.Y.Height, frameData.Y.Stride, frameData.Y.Data.Length));
+            // UnityEngine.Debug.Log(String.Format("U | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.U.Width, frameData.U.Height, frameData.U.Stride, frameData.U.Data.Length));
+            // UnityEngine.Debug.Log(String.Format("V | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.V.Width, frameData.V.Height, frameData.V.Stride, frameData.V.Data.Length));
+            processQueue.Enqueue(frameData);
+
         }
         #endif
 
@@ -87,49 +123,88 @@ namespace MagicLeap
         /// </summary>
         public void OnRawCaptureEnded()
         {
-            Debug.Log("Ended capture data");
+            UnityEngine.Debug.Log("Ended capture data");
         }
 
-        private async void sendFrame(MLCamera.YUVFrameInfo frameData) {
-            await Task.Run(() => {
-                YUV2RGB(frameData);
-            });
+        private static int addHeader(int headerValue, int index, byte[] buffer) {
+            byte[] headerBytes = BitConverter.GetBytes(headerValue);    
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(headerBytes);
+            Array.Copy(headerBytes, 0, buffer, index, headerBytes.Length);
+            return headerBytes.Length;
         }
 
-        private void YUV2RGB(MLCamera.YUVFrameInfo frameData) {
-            
-            // Debug.Log(String.Format("Y | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.Y.Width, frameData.Y.Height, frameData.Y.Stride, frameData.Y.Data.Length));
-            // Debug.Log(String.Format("U | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.U.Width, frameData.U.Height, frameData.U.Stride, frameData.U.Data.Length));
-            // Debug.Log(String.Format("V | Width: {0} | Height: {1} | Stride {2} | Data: {3}", frameData.V.Width, frameData.V.Height, frameData.V.Stride, frameData.V.Data.Length));
-            _ready = false;
-            int bufferSize = (frameData.Y.Data.Length + frameData.U.Data.Length + frameData.V.Data.Length) / this._compressionLevel;
-            byte[] newBuffer = new byte[bufferSize];
-            if (this._compressionLevel == 1) {
-                Array.Copy(frameData.Y.Data, 0, newBuffer, 0, frameData.Y.Data.Length);
-                Array.Copy(frameData.U.Data, 0, newBuffer, frameData.Y.Data.Length, frameData.U.Data.Length);
-                Array.Copy(frameData.V.Data, 0, newBuffer, frameData.Y.Data.Length + frameData.U.Data.Length, frameData.V.Data.Length);
-            } else {
-                int i = 0;
-                for (int j=0; j < frameData.Y.Data.Length; j++) {
-                    if ((j % this._compressionLevel) == 0) {
-                        newBuffer[i++] = frameData.Y.Data[j];
-                    }
-                }
-
-                for (int j=0; j < frameData.U.Data.Length; j++) {
-                    if ((j % this._compressionLevel) == 0) {
-                        newBuffer[i++] = frameData.U.Data[j];
-                    }
-                }
-
-                for (int j=0; j < frameData.V.Data.Length; j++) {
-                    if ((j % this._compressionLevel) == 0) {
-                        newBuffer[i++] = frameData.V.Data[j];
-                    }
-                }
+        private byte[] _deflate(byte[] data){
+            MemoryStream output = new MemoryStream();
+            using (GZipStream dstream = new GZipStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                dstream.Write(data, 0, data.Length);
+                dstream.Close();
             }
-            _webClient.Send(newBuffer);
-            _ready = true;
+            return output.ToArray();
+        }
+
+        public void YUV2RGB(MyQueue<MLCamera.YUVFrameInfo> processQueue, MyQueue<byte[]> sendQueue) {
+            try{
+                while (true) {
+                    MLCamera.YUVFrameInfo frameData = processQueue.Dequeue();
+                    // Stopwatch stopwatch = new Stopwatch();
+                    // stopwatch.Start();
+                    // int bufferSize = (frameData.Y.Data.Length + frameData.U.Data.Length + frameData.V.Data.Length) / (COMPRESSION_LEVEL * COMPRESSION_LEVEL);
+                    
+                    int headerSize = 8;
+                    int newWidth = ((int) frameData.Y.Width) / COMPRESSION_LEVEL;
+                    int newHeight = ((int) frameData.Y.Height) / COMPRESSION_LEVEL;
+                    int bufferSize = newWidth * newHeight / 4 * 6;
+
+
+                    byte[] newBuffer = new byte[headerSize + bufferSize];
+
+                    int i = 0;
+                    i += addHeader(newWidth, i, newBuffer);
+                    i += addHeader(newHeight, i, newBuffer);
+
+                    if (COMPRESSION_LEVEL == 1) {
+                        Array.Copy(frameData.Y.Data, 0, newBuffer, i, frameData.Y.Data.Length);
+                        Array.Copy(frameData.U.Data, 0, newBuffer, i + frameData.Y.Data.Length, frameData.U.Data.Length);
+                        Array.Copy(frameData.V.Data, 0, newBuffer, i + frameData.Y.Data.Length + frameData.U.Data.Length, frameData.V.Data.Length);
+                    } else {
+                        
+                        for (int j=0; j < frameData.Y.Data.Length; j++) {
+                            if ((j % COMPRESSION_LEVEL) == 0 && ((j % frameData.Y.Stride) < frameData.Y.Width)) {
+                                if (((j / frameData.Y.Stride) % COMPRESSION_LEVEL) == 0) {
+                                    newBuffer[i++] = frameData.Y.Data[j];
+                                }
+                            }
+                        }
+
+                        for (int j=0; j < frameData.U.Data.Length; j++) {
+                            if ((j % COMPRESSION_LEVEL) == 0 && ((j % frameData.U.Stride) < frameData.U.Width)) {
+                                if (((j / frameData.U.Stride) % COMPRESSION_LEVEL) == 0) {
+                                    newBuffer[i++] = frameData.U.Data[j];
+                                }
+                            }
+                        }
+
+                        for (int j=0; j < frameData.V.Data.Length; j++) {
+                            if ((j % COMPRESSION_LEVEL) == 0 && ((j % frameData.V.Stride) < frameData.V.Width)) {
+                                if (((j / frameData.V.Stride) % COMPRESSION_LEVEL) == 0) {
+                                    newBuffer[i++] = frameData.V.Data[j];
+                                }
+                            }
+                        }
+
+                        // UnityEngine.Debug.LogError(String.Format("NEW HEIGHT {0} | NEW WIDTH {1} | NEW BUFFER SIZE {2} | INDEX AT {3}", newHeight, newWidth, newBuffer.Length, i));
+                    }
+                    // stopwatch.Stop();
+                    // UnityEngine.Debug.LogError(String.Format("PreProcessing Time is {0} ms", stopwatch.ElapsedMilliseconds));
+                    newBuffer = _deflate(newBuffer);
+                    sendQueue.Enqueue(newBuffer);
+                }
+            } catch(Exception e){
+                UnityEngine.Debug.LogError(e);
+            }
         }
     }
 }
+

@@ -74,7 +74,8 @@ namespace MagicLeapTools
         //Flow:
         private void OnEnable()
         {
-            Application.logMessageReceived += HandleLog;
+            // Application.logMessageReceived += HandleLog;
+            Application.logMessageReceivedThreaded += HandleLog;
             controlInput.OnTapped.AddListener(HandleTap);
             controlInput.OnTouchHold.AddListener(JumpToBottom);
             controlInput.OnBumperHold.AddListener(ToggleVisibility);
@@ -83,7 +84,8 @@ namespace MagicLeapTools
 
         private void OnDisable()
         {
-            Application.logMessageReceived -= HandleLog;
+            // Application.logMessageReceived -= HandleLog;
+            Application.logMessageReceivedThreaded -= HandleLog;
             controlInput.OnTapped.RemoveListener(HandleTap);
             controlInput.OnTouchHold.RemoveListener(JumpToBottom);
 			controlInput.OnBumperHold.RemoveListener(ToggleVisibility);
