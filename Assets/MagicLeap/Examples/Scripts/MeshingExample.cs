@@ -15,8 +15,15 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.MagicLeap;
-using System.Collections;
+using UnityEngine.XR;
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Threading;
+using System.IO;
+using System.IO.Compression;
 using MagicLeap.Core.StarterKit;
+using Neji;
 
 namespace MagicLeap
 {
@@ -26,6 +33,11 @@ namespace MagicLeap
     /// </summary>
     public class MeshingExample : MonoBehaviour
     {
+        private static readonly int PROCESS_THREAD_NUM = 4;
+
+        [SerializeField]
+        private WebClient _webClient;
+
         [SerializeField, Tooltip("The spatial mapper from which to update mesh params.")]
         private MLSpatialMapper _mlSpatialMapper = null;
 
@@ -59,6 +71,13 @@ namespace MagicLeap
         private const int BALL_LIFE_TIME = 10;
 
         private Camera _camera = null;
+        
+        private MyQueue<MeshId> processQueue;
+        private MyQueue<byte[]> sendQueue;
+
+        private List<Thread> processThreads;
+
+        private Thread sendThread;
 
         /// <summary>
         /// Initializes component data and starts MLInput.
@@ -150,12 +169,128 @@ namespace MagicLeap
             }
             #endif
 
+            if (_webClient == null) {
+                _webClient = GameObject.Find("WebClient").GetComponent<WebClient>();
+            }
             _meshingVisualizer.SetRenderers(_renderMode);
 
             _mlSpatialMapper.gameObject.transform.position = _camera.gameObject.transform.position;
             _mlSpatialMapper.gameObject.transform.localScale = _bounded ? _boundedExtentsSize : _boundlessExtentsSize;
 
+            processQueue = new MyQueue<MeshId>(100);
+            sendQueue = new MyQueue<byte[]>(100);
+
+            processThreads = new List<Thread>(PROCESS_THREAD_NUM);
+            sendThread = new Thread(()=>SendFromQueue(sendQueue));
+            for (int i = 0; i<PROCESS_THREAD_NUM; i++) {
+                Thread processThread = new Thread(()=>serializeMesh());
+                processThreads.Add(processThread);
+            }
+
+            _mlSpatialMapper.meshAdded += onMeshAdded;
+            _mlSpatialMapper.meshUpdated += onMeshUpdated;
+            _mlSpatialMapper.meshRemoved += onMeshRemoved;
+
+            _webClient.StartClient();
+            foreach (Thread processThread in processThreads) {
+                processThread.Start();
+            }
+            sendThread.Start();
+
             _visualBounds.SetActive(_bounded);
+        }
+
+        private void SendFromQueue(MyQueue<byte[]> sendQueue) {
+            Debug.Log("Send Thread running...");
+            try{
+                while (true){
+                    byte[] data = sendQueue.Dequeue();
+                    _webClient.Send(data);
+                }
+            } catch (Exception e){
+                UnityEngine.Debug.LogError(e);
+            }
+        }
+
+        private byte[] _deflate(byte[] data){
+            MemoryStream output = new MemoryStream();
+            using (GZipStream dstream = new GZipStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                dstream.Write(data, 0, data.Length);
+                dstream.Close();
+            }
+            return output.ToArray();
+        }
+
+        private byte[] appendArrays(params byte[][] arrays){
+            int newLength = 0;
+            foreach (byte[] array in arrays){
+                newLength += array.Length;
+            }
+            byte[] result = new byte[newLength];
+            int i = 0;
+            foreach (byte[] array in arrays){
+                Buffer.BlockCopy(array, 0, result, i, array.Length);
+                i += array.Length;
+            }
+
+            return result;
+        }
+
+        private void serializeMesh(){
+            Debug.Log("Thread Running...");
+            try{
+                while (true) {
+                    MeshId meshId = processQueue.Dequeue();
+                    // Debug.Log(String.Format("Processing {0}", meshId));
+                    byte[] meshIdBytes = Encoding.ASCII.GetBytes(meshId.ToString());
+                    GameObject go = _mlSpatialMapper.meshIdToGameObjectMap[meshId];
+                    Mesh mesh = go.GetComponent<MeshFilter>().mesh;
+                    Vector3[] vertices = mesh.vertices;
+
+                    byte[] idLength = BitConverter.GetBytes(meshIdBytes.Length);
+                    byte[] verticesNum = BitConverter.GetBytes(vertices.Length);
+
+                    byte[] verticesBuffer = serializeVectors(vertices);
+                    byte[] buffer = appendArrays(idLength, meshIdBytes, verticesNum, verticesBuffer);
+                    
+                    buffer = _deflate(buffer);
+                    sendQueue.Enqueue(buffer);
+                }
+            } catch(Exception e){
+                UnityEngine.Debug.LogError(e);
+            }
+        }
+
+        private byte[] serializeVectors(Vector3[] vectors){
+            byte[] result = new byte[vectors.Length * 3 * 4];
+            int i = 0;
+            foreach (Vector3 vector in vectors){
+                byte[] xBytes = BitConverter.GetBytes(vector.x);
+                Buffer.BlockCopy(xBytes, 0, result, i, xBytes.Length);
+                i += 4;
+
+                byte[] yBytes = BitConverter.GetBytes(vector.y);
+                Buffer.BlockCopy(yBytes, 0, result, i, yBytes.Length);
+                i += 4;
+
+                byte[] zBytes = BitConverter.GetBytes(vector.z);
+                Buffer.BlockCopy(zBytes, 0, result, i, zBytes.Length);
+                i += 4;
+            }
+            return result;
+        }
+
+        public void onMeshAdded(MeshId meshId) {
+            processQueue.Enqueue(meshId);
+        }
+
+        public void onMeshUpdated(MeshId meshId) {
+            processQueue.Enqueue(meshId);
+        }
+
+        public void onMeshRemoved(MeshId meshId) {
+            processQueue.Enqueue(meshId);
         }
 
         /// <summary>
@@ -252,7 +387,7 @@ namespace MagicLeap
                 GameObject ball = Instantiate(_shootingPrefab);
 
                 ball.SetActive(true);
-                float ballsize = Random.Range(MIN_BALL_SIZE, MAX_BALL_SIZE);
+                float ballsize = UnityEngine.Random.Range(MIN_BALL_SIZE, MAX_BALL_SIZE);
                 ball.transform.localScale = new Vector3(ballsize, ballsize, ballsize);
                 ball.transform.position = _camera.gameObject.transform.position;
 
